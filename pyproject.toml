@@ -1,0 +1,16 @@
+[project]
+name = "backend-project"
+version = "0.1.0"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "sqlalchemy",
+    "alembic",
+    "psycopg2-binary",
+    "redis",
+    "celery",
+    "httpx",
+    "pydantic-settings",
+    "pytest",
+    "pytest-asyncio",
+]
