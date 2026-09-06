@@ -15,5 +15,5 @@ class ProviderError(Exception):
 
 class ImageProvider(ABC):
     @abstractmethod
-    def generate(self, prompt: str) -> ProviderResult:
+    async def generate(self, prompt: str) -> ProviderResult:
         ...

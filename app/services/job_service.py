@@ -23,29 +23,33 @@ class JobService:
         if target not in VALID_TRANSITIONS.get(current, set()):
             raise InvalidTransition(current, target)
 
-    def submit(self, api_key_id: uuid.UUID, prompt: str):
+    async def submit(self, api_key_id: uuid.UUID, prompt: str):
         job_id = uuid.uuid4()
         job = self.job_repo.create(job_id, api_key_id, prompt)
         # same transaction, same session -> atomic with the job insert (outbox pattern)
-        self.outbox_repo.create(job_id, payload={"job_id": str(job_id), "prompt": prompt})
+        self.outbox_repo.create(
+            job_id=job_id,
+            event_type="JOB_SUBMITTED",
+            payload={"job_id": str(job_id), "prompt": prompt},
+        )
         return job
 
-    def start_processing(self, job_id: uuid.UUID):
-        job = self.job_repo.get_for_update(job_id)
+    async def start_processing(self, job_id: uuid.UUID):
+        job = await self.job_repo.get_for_update(job_id)
         if job is None:
             raise JobNotFound(job_id)
         self._assert_transition(job.status, "PROCESSING")
         return self.job_repo.update_status(job, "PROCESSING")
 
-    def complete(self, job_id: uuid.UUID, result_url: str):
-        job = self.job_repo.get_for_update(job_id)
+    async def complete(self, job_id: uuid.UUID, result_url: str):
+        job = await self.job_repo.get_for_update(job_id)
         if job is None:
             raise JobNotFound(job_id)
         self._assert_transition(job.status, "COMPLETED")
         return self.job_repo.update_status(job, "COMPLETED", result_url=result_url)
 
-    def fail(self, job_id: uuid.UUID, error_message: str, retryable: bool):
-        job = self.job_repo.get_for_update(job_id)
+    async def fail(self, job_id: uuid.UUID, error_message: str, retryable: bool):
+        job = await self.job_repo.get_for_update(job_id)
         if job is None:
             raise JobNotFound(job_id)
         self._assert_transition(job.status, "FAILED")

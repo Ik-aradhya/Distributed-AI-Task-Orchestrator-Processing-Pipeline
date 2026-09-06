@@ -27,3 +27,5 @@ class JobStatusResponse(BaseModel):
     error_message: str | None = None
     created_at: datetime
     updated_at: datetime
+
+    

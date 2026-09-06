@@ -28,6 +28,6 @@ async def get_current_api_key(
 async def enforce_rate_limit(api_key=Depends(get_current_api_key)):
     settings = get_settings()
     limiter = RateLimitService(get_redis(), settings.rate_limit_requests_per_minute)
-    if not limiter.check_and_increment(str(api_key.id)):
+    if not await limiter.check_and_increment(str(api_key.id)):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
     return api_key
