@@ -11,6 +11,7 @@ from app.core.redis_client import get_redis
 from app.core.config import get_settings
 from app.repositories.job_repository import JobRepository
 from app.repositories.outbox_repository import OutboxRepository
+from app.models.job import JobStatus
 from app.services.job_service import JobService
 from app.services.exceptions import InvalidTransition, JobNotFound
 from app.providers.hosted_provider import HostedProvider
@@ -72,7 +73,9 @@ async def _async_generate_image_task(task, job_id: str):
             prompt = job.prompt
             await session.commit()
         except (InvalidTransition, JobNotFound):
-            return  # duplicate delivery on an already-handled job -> safe no-op
+            # Fires only for genuinely unrecoverable duplicates (e.g. job already COMPLETED).
+            # Worker-crash recovery (job stuck in PROCESSING) is handled inside start_processing().
+            return
 
     await _publish_status(job_id, "PROCESSING")
 
@@ -85,8 +88,9 @@ async def _async_generate_image_task(task, job_id: str):
             job = await svc.fail(uuid.UUID(job_id), str(e), retryable=e.retryable)
             await session.commit()
 
-        await _publish_status(job_id, job.status, error=str(e))
-        if job.status == "RETRYING":
+        await _publish_status(job_id, job.status.value, error=str(e))
+        if job.status == JobStatus.RETRYING:
+            # start_processing() will advance RETRYING → QUEUED → PROCESSING on redelivery.
             retry_index = max(0, job.retry_count - 1)
             backoff = settings.celery_backoff_base_seconds * (2 ** retry_index)
             raise task.retry(exc=e, countdown=backoff, max_retries=settings.celery_max_retries)

@@ -7,9 +7,10 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import enforce_rate_limit
-from app.core.db import get_db_session
+from app.core.db import AsyncSessionLocal, get_db_session
 from app.core.config import get_settings
 from app.core.redis_client import get_redis
+from app.models.job import JobStatus
 from app.repositories.job_repository import JobRepository
 from app.repositories.outbox_repository import OutboxRepository
 from app.services.job_service import JobService
@@ -26,7 +27,8 @@ async def submit_job(
 ):
     settings = get_settings()
     svc = JobService(JobRepository(db), OutboxRepository(db), settings.celery_max_retries)
-    job = await svc.submit(api_key.id, body.prompt)
+    job = svc.submit(api_key.id, body.prompt)
+    await db.commit()
     return JobCreateResponse(job_id=job.id, status=job.status)
 
 
@@ -52,25 +54,44 @@ async def get_job_status(
 @router.get("/{job_id}/stream")
 async def stream_job_status(
     job_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db_session),
     api_key=Depends(enforce_rate_limit),
 ):
-    job = await JobRepository(db).get_by_id(job_id)
-    if job is None or job.api_key_id != api_key.id:
-        raise HTTPException(status_code=404, detail="Job not found")
+    async with AsyncSessionLocal() as session:
+        job = await JobRepository(session).get_by_id(job_id)
+        if job is None or job.api_key_id != api_key.id:
+            raise HTTPException(status_code=404, detail="Job not found")
 
     async def event_generator():
         redis = get_redis()
         pubsub = redis.pubsub()
         await pubsub.subscribe(f"job:{job_id}:status")
         try:
+            # Check DB state after subscribing to eliminate race conditions
+            async with AsyncSessionLocal() as session:
+                current_job = await JobRepository(session).get_by_id(job_id)
+
+            if current_job and current_job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
+                payload = {
+                    "job_id": str(current_job.id),
+                    "status": current_job.status.value if hasattr(current_job.status, "value") else str(current_job.status),
+                }
+                if current_job.result_url:
+                    payload["result_url"] = current_job.result_url
+                if current_job.error_message:
+                    payload["error"] = current_job.error_message
+                yield f"data: {json.dumps(payload)}\n\n"
+                return
+
             while True:
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                 if message and message["type"] == "message":
                     data = json.loads(message["data"])
                     yield f"data: {json.dumps(data)}\n\n"
-                    if data["status"] in ("COMPLETED", "FAILED"):
+                    if data.get("status") in ("COMPLETED", "FAILED"):
                         break
+                else:
+                    # SSE comment heartbeat to prevent reverse-proxy timeout (Nginx/Cloudflare/ALB)
+                    yield ": ping\n\n"
                 await asyncio.sleep(0.1)
         finally:
             await pubsub.unsubscribe(f"job:{job_id}:status")

@@ -12,12 +12,12 @@ class Settings(BaseSettings):
     # Redis — backs broker, pub/sub, and rate limiting
     redis_url: RedisDsn
 
-    # Logging
-    log_level: str = "INFO"
-
     # Image generation provider
     provider_api_key: SecretStr
     provider_base_url: str
+
+    # Logging
+    log_level: str = "INFO"
 
     # Celery retry tuning
     celery_max_retries: int = 5

@@ -2,9 +2,8 @@
 import hashlib
 
 from fastapi import Depends, Header, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import get_db_session
+from app.core.db import AsyncSessionLocal
 from app.core.redis_client import get_redis
 from app.core.config import get_settings
 from app.repositories.api_key_repository import ApiKeyRepository
@@ -17,12 +16,12 @@ def hash_api_key(raw_key: str) -> str:
 
 async def get_current_api_key(
     x_api_key: str = Header(..., alias="X-API-Key"),
-    db: AsyncSession = Depends(get_db_session),
 ):
-    api_key = await ApiKeyRepository(db).get_by_hash(hash_api_key(x_api_key))
-    if api_key is None:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return api_key
+    async with AsyncSessionLocal() as session:
+        api_key = await ApiKeyRepository(session).get_by_hash(hash_api_key(x_api_key))
+        if api_key is None:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        return api_key
 
 
 async def enforce_rate_limit(api_key=Depends(get_current_api_key)):

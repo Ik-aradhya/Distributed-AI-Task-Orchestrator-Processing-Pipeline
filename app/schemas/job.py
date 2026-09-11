@@ -23,9 +23,9 @@ class JobStatusResponse(BaseModel):
 
     job_id: uuid.UUID
     status: JobStatus
-    result_url: str | None = None
-    error_message: str | None = None
     created_at: datetime
     updated_at: datetime
+    result_url: str | None = None
+    error_message: str | None = None
 
     
