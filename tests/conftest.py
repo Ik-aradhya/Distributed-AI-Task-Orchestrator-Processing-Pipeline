@@ -41,6 +41,11 @@ _fake_redis_server = fakeredis.FakeServer()
 from sqlalchemy.pool import NullPool
 
 
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
 @pytest_asyncio.fixture()
 async def test_engine():
     engine = create_async_engine(TEST_DB_URL, poolclass=NullPool)

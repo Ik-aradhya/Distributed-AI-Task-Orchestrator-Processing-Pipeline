@@ -77,12 +77,33 @@ async def test_concurrent_updates_to_same_job(test_engine, api_key):
 
     await asyncio.gather(*[attempt_start(i) for i in range(10)])
 
-    successes = [r for r in results if r[0] == "success"]
-    failures = [r for r in results if r[0] == "failed"]
+    # All 10 tasks reach PROCESSING state safely due to get_for_update row lock & crash-recovery idempotency
+    assert len(results) == 10
+    assert all(r[2] == JobStatus.PROCESSING for r in results)
 
-    # Exactly 1 task must succeed in moving QUEUED -> PROCESSING
-    assert len(successes) == 1
-    assert len(failures) == 9
+    # Mark job COMPLETED
+    async with async_session() as session:
+        job_repo = JobRepository(session)
+        outbox_repo = OutboxRepository(session)
+        svc = JobService(job_repo, outbox_repo, max_retries=3)
+        await svc.complete(job_id, "https://cdn.example.com/done.png")
+        await session.commit()
+
+    # Now attempt start_processing on COMPLETED job concurrently — all 10 MUST fail with InvalidTransition
+    terminal_results = []
+
+    async def attempt_terminal_start():
+        async with async_session() as session:
+            job_repo = JobRepository(session)
+            outbox_repo = OutboxRepository(session)
+            svc = JobService(job_repo, outbox_repo, max_retries=3)
+            try:
+                await svc.start_processing(job_id)
+            except InvalidTransition:
+                terminal_results.append("invalid_transition")
+
+    await asyncio.gather(*[attempt_terminal_start() for _ in range(10)])
+    assert len(terminal_results) == 10
 
 
 @pytest.mark.anyio
@@ -91,15 +112,18 @@ async def test_outbox_concurrency_skip_locked(test_engine, api_key, mocker):
     key_row, _ = api_key
     mock_send = mocker.patch("app.relay.outbox_relay.celery_app.send_task")
 
-    # Insert 50 outbox entries
+    # Insert 50 jobs and 50 outbox entries
     async_session = async_sessionmaker(bind=test_engine, expire_on_commit=False)
     async with async_session() as session:
+        job_repo = JobRepository(session)
         outbox_repo = OutboxRepository(session)
         for i in range(50):
+            jid = uuid.uuid4()
+            job_repo.create(jid, key_row.id, f"Prompt {i}")
             outbox_repo.create(
-                job_id=uuid.uuid4(),
+                job_id=jid,
                 event_type="JOB_SUBMITTED",
-                payload={"job_id": str(uuid.uuid4()), "prompt": f"Prompt {i}"},
+                payload={"job_id": str(jid), "prompt": f"Prompt {i}"},
             )
         await session.commit()
 
