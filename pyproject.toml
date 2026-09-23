@@ -4,13 +4,20 @@ version = "0.1.0"
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
-    "sqlalchemy",
+    "sqlalchemy[asyncio]",
     "alembic",
+    "asyncpg",
     "psycopg2-binary",
     "redis",
     "celery",
     "httpx",
     "pydantic-settings",
+]
+
+[project.optional-dependencies]
+test = [
     "pytest",
     "pytest-asyncio",
+    "pytest-mock",
+    "anyio",
 ]

@@ -1,8 +1,5 @@
 import logging
-
-# pyrefly: ignore [missing-import]
 import structlog
-
 from app.core.config import get_settings
 
 
@@ -19,6 +16,8 @@ def configure_logging() -> None:
         processors=[
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
+            structlog.processors.StackInfoRenderer(),
+            structlog.dev.set_exc_info,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.JSONRenderer(),
         ],
@@ -26,3 +25,7 @@ def configure_logging() -> None:
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
+
+
+def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
+    return structlog.get_logger(name)

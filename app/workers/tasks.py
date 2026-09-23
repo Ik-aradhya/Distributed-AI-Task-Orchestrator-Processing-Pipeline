@@ -9,6 +9,7 @@ from app.workers.celery_app import celery_app
 from app.core.db import AsyncSessionLocal
 from app.core.redis_client import get_redis
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.repositories.job_repository import JobRepository
 from app.repositories.outbox_repository import OutboxRepository
 from app.models.job import JobStatus
@@ -16,6 +17,8 @@ from app.services.job_service import JobService
 from app.services.exceptions import InvalidTransition, JobNotFound
 from app.providers.hosted_provider import HostedProvider
 from app.providers.base import ProviderError
+
+logger = get_logger("celery_worker")
 
 _loop: asyncio.AbstractEventLoop | None = None
 _provider: HostedProvider | None = None
@@ -42,11 +45,13 @@ def init_worker_process(**kwargs):
     _loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_loop)
     _provider = HostedProvider()
+    logger.info("worker_process_initialized")
 
 
 @worker_process_shutdown.connect
 def shutdown_worker_process(**kwargs):
     global _loop, _provider
+    logger.info("worker_process_shutting_down")
     if _provider and _loop and not _loop.is_closed():
         _loop.run_until_complete(_provider.close())
         _provider = None
@@ -65,6 +70,7 @@ async def _publish_status(job_id: str, status: str, **extra):
 
 async def _async_generate_image_task(task, job_id: str):
     settings = get_settings()
+    log = logger.bind(job_id=job_id)
 
     async with AsyncSessionLocal() as session:
         svc = JobService(JobRepository(session), OutboxRepository(session), settings.celery_max_retries)
@@ -72,17 +78,20 @@ async def _async_generate_image_task(task, job_id: str):
             job = await svc.start_processing(uuid.UUID(job_id))
             prompt = job.prompt
             await session.commit()
-        except (InvalidTransition, JobNotFound):
-            # Fires only for genuinely unrecoverable duplicates (e.g. job already COMPLETED).
-            # Worker-crash recovery (job stuck in PROCESSING) is handled inside start_processing().
+            log.info("job_processing_started", prompt_len=len(prompt))
+        except (InvalidTransition, JobNotFound) as e:
+            log.warning("job_start_skipped", reason=str(e))
             return
 
     await _publish_status(job_id, "PROCESSING")
 
     provider = _get_provider()
     try:
-        result = await provider.generate(prompt)
+        # job_id is the stable idempotency key — identical on every Celery redelivery.
+        result = await provider.generate(prompt, idempotency_key=job_id)
+        log.info("provider_generation_succeeded", image_url=result.image_url)
     except ProviderError as e:
+        log.error("provider_generation_failed", error=str(e), retryable=e.retryable)
         async with AsyncSessionLocal() as session:
             svc = JobService(JobRepository(session), OutboxRepository(session), settings.celery_max_retries)
             job = await svc.fail(uuid.UUID(job_id), str(e), retryable=e.retryable)
@@ -90,9 +99,9 @@ async def _async_generate_image_task(task, job_id: str):
 
         await _publish_status(job_id, job.status.value, error=str(e))
         if job.status == JobStatus.RETRYING:
-            # start_processing() will advance RETRYING → QUEUED → PROCESSING on redelivery.
             retry_index = max(0, job.retry_count - 1)
             backoff = settings.celery_backoff_base_seconds * (2 ** retry_index)
+            log.info("scheduling_job_retry", retry_count=job.retry_count, backoff_seconds=backoff)
             raise task.retry(exc=e, countdown=backoff, max_retries=settings.celery_max_retries)
         return
 
@@ -101,6 +110,7 @@ async def _async_generate_image_task(task, job_id: str):
         await svc.complete(uuid.UUID(job_id), result.image_url)
         await session.commit()
 
+    log.info("job_completed_successfully")
     await _publish_status(job_id, "COMPLETED", result_url=result.image_url)
 
 

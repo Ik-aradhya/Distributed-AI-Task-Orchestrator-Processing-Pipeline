@@ -16,9 +16,17 @@ class Base(DeclarativeBase):
 
 settings = get_settings()
 
+import os
+import sys
+from sqlalchemy.pool import NullPool
+
+pool_kwargs = {"pool_pre_ping": True}
+if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("TEST_DATABASE_URL"):
+    pool_kwargs = {"poolclass": NullPool}
+
 engine = create_async_engine(
     str(settings.database_url),
-    pool_pre_ping=True,
+    **pool_kwargs,
 )
 
 AsyncSessionLocal = async_sessionmaker(

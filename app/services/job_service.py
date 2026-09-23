@@ -1,4 +1,3 @@
-# app/services/job_service.py
 
 import uuid
 

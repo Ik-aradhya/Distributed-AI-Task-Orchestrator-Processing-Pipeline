@@ -11,11 +11,17 @@ class HostedProvider(ImageProvider):
         self.timeout = timeout
         self.client = client or httpx.AsyncClient(timeout=self.timeout)
 
-    async def generate(self, prompt: str) -> ProviderResult:
+    async def generate(self, prompt: str, idempotency_key: str) -> ProviderResult:
         try:
             response = await self.client.post(
                 f"{self.base_url}/generate",
-                headers={"Authorization": f"Bearer {self.api_key}"},
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    # Stable job_id sent on every attempt (including retries).
+                    # If the provider supports deduplication, it will return the
+                    # previously generated result instead of creating a new image.
+                    "Idempotency-Key": idempotency_key,
+                },
                 json={"prompt": prompt},
             )
         except httpx.TimeoutException as e:
