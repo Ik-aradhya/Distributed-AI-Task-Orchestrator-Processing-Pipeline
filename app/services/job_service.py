@@ -1,11 +1,8 @@
-
 import uuid
-
 from app.models.job import JobStatus
 from app.repositories.job_repository import JobRepository
 from app.repositories.outbox_repository import OutboxRepository
 from app.services.exceptions import JobNotFound, InvalidTransition
-
 
 VALID_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
     JobStatus.PENDING: {JobStatus.QUEUED},
@@ -84,12 +81,12 @@ class JobService:
 
         # Crash recovery: a previous worker died mid-task leaving the job in PROCESSING.
         # get_for_update() row-lock guarantees only one worker reaches this branch at a time,
-        # so we can safely re-enter without a state write — the status is already correct.
+        # so we can safely re-enter without a state write - the status is already correct.
         if job.status == JobStatus.PROCESSING:
             return job
 
-        # Retry redelivery: advance RETRYING → QUEUED first, then fall through to
-        # the normal QUEUED → PROCESSING transition below.
+        # Retry redelivery: advance RETRYING to QUEUED first, then fall through to
+        # the normal QUEUED to PROCESSING transition below.
         if job.status == JobStatus.RETRYING:
             self._assert_transition(JobStatus.RETRYING, JobStatus.QUEUED)
             self.job_repo.update_status(job, JobStatus.QUEUED)
@@ -142,7 +139,7 @@ class JobService:
 
         if retryable and job.retry_count < self.max_retries:
             # Celery will re-deliver the task; start_processing() will advance
-            # RETRYING → QUEUED → PROCESSING on the next attempt.
+            # RETRYING to QUEUED to PROCESSING on the next attempt.
             self._assert_transition(
                 JobStatus.FAILED,
                 JobStatus.RETRYING,
@@ -154,4 +151,4 @@ class JobService:
                 retry_count=job.retry_count + 1,
             )
 
-        return job  # terminal FAILED — retries exhausted or non-retryable
+        return job  # terminal FAILED - retries exhausted or non-retryable

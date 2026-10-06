@@ -3,7 +3,11 @@ from celery import Celery
 from app.core.config import get_settings
 
 settings = get_settings()
-celery_app = Celery("image_orchestrator", broker=str(settings.redis_url))
+celery_app = Celery(
+    "image_orchestrator",
+    broker=str(settings.redis_url),
+    include=["app.workers.tasks"],   # ensures generate_image task is registered
+)
 
 celery_app.conf.update(
     task_acks_late=True,            # ack only after task finishes -> crash mid-task redelivers it

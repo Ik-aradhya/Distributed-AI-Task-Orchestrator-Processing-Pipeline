@@ -1,7 +1,11 @@
-# app/providers/hosted_provider.py
 import httpx
-from app.providers.base import ImageProvider, ProviderResult, ProviderError
+
 from app.core.config import get_settings
+from app.core.logging import get_logger
+from app.providers.base import ImageProvider, ProviderResult, ProviderError
+
+logger = get_logger("hosted_provider")
+
 
 class HostedProvider(ImageProvider):
     def __init__(self, client: httpx.AsyncClient | None = None, timeout: float = 60.0):
@@ -25,9 +29,11 @@ class HostedProvider(ImageProvider):
                 json={"prompt": prompt},
             )
         except httpx.TimeoutException as e:
-            raise ProviderError(f"Provider timed out: {e}", retryable=True)
+            logger.warning("provider_timeout", error_type=type(e).__name__)
+            raise ProviderError("Provider timed out", retryable=True) from e
         except httpx.RequestError as e:
-            raise ProviderError(f"Provider request failed: {e}", retryable=True)
+            logger.warning("provider_request_failed", error_type=type(e).__name__)
+            raise ProviderError("Provider request failed", retryable=True) from e
 
         if response.status_code == 429:
             raise ProviderError("Provider rate limited us", retryable=True)
@@ -43,7 +49,8 @@ class HostedProvider(ImageProvider):
         except Exception as e:
             if isinstance(e, ProviderError):
                 raise
-            raise ProviderError(f"Failed to parse provider response JSON: {e}", retryable=False)
+            logger.warning("provider_response_json_parse_failed", error_type=type(e).__name__)
+            raise ProviderError("Failed to parse provider response JSON", retryable=False) from e
 
         return ProviderResult(image_url=data["url"], raw_response=data)
 

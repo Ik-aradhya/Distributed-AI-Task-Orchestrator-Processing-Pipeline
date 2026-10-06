@@ -16,7 +16,7 @@ from app.relay.outbox_relay import poll_cycle
 from app.workers.tasks import _async_generate_image_task
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_simultaneous_job_submissions(db_session: AsyncSession, redis_client, api_key, make_provider_mock):
     """Test submitting 50 jobs simultaneously via concurrent HTTP requests."""
     key_row, raw_key = api_key
@@ -42,7 +42,7 @@ async def test_simultaneous_job_submissions(db_session: AsyncSession, redis_clie
     assert outbox_count.scalar() == 50
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_concurrent_updates_to_same_job(test_engine, api_key):
     """Test 10 concurrent worker tasks trying to start_processing on the exact same job."""
     key_row, _ = api_key
@@ -106,7 +106,7 @@ async def test_concurrent_updates_to_same_job(test_engine, api_key):
     assert len(terminal_results) == 10
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_outbox_concurrency_skip_locked(test_engine, api_key, mocker):
     """Test 5 concurrent outbox pollers with FOR UPDATE SKIP LOCKED picking up 50 rows."""
     key_row, _ = api_key
@@ -127,19 +127,25 @@ async def test_outbox_concurrency_skip_locked(test_engine, api_key, mocker):
             )
         await session.commit()
 
-    # Run 5 concurrent outbox poller cycles
-    await asyncio.gather(*[poll_cycle() for _ in range(5)])
+    # Run concurrent outbox pollers to drain all batches
+    async def drain():
+        for _ in range(4):
+            await poll_cycle()
+
+    await asyncio.gather(*[drain() for _ in range(5)])
 
     # All 50 outbox events must be dispatched exactly once
     assert mock_send.call_count == 50
 
     # Verify in DB that all 50 outbox items are marked dispatched
     async with async_session() as session:
-        result = await session.execute(select(func.count()).select_from(Outbox).where(Outbox.dispatched == False))
+        result = await session.execute(
+            select(func.count()).select_from(Outbox).where(Outbox.dispatched_at.is_(None))
+        )
         assert result.scalar() == 0
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_rate_limiting_under_concurrent_burst(redis_client, api_key, monkeypatch):
     """Test 30 burst requests against a rate limit of 10 requests/min."""
     key_row, raw_key = api_key

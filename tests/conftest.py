@@ -27,7 +27,9 @@ TEST_DB_URL = os.environ.get(
 os.environ["DATABASE_URL"] = TEST_DB_URL
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("PROVIDER_API_KEY", "test-key")
+os.environ.setdefault("PROVIDER_ALLOW_INSECURE_HTTP", "true")
 os.environ.setdefault("PROVIDER_BASE_URL", "http://fake-provider")
+os.environ.setdefault("API_DOCS_ENABLED", "true")
 
 from app.core.config import get_settings  # noqa: E402
 from app.core.db import AsyncSessionLocal, Base, engine as app_engine  # noqa: E402

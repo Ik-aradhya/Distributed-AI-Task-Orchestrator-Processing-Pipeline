@@ -18,23 +18,13 @@ async def test_rate_limit_blocks_excess_requests(
     Fourth submission → 429.
     """
     from app.core import config as config_module
-
-    original_settings = config_module.get_settings()
-
-    class _LowLimitSettings:
-        database_url = original_settings.database_url
-        redis_url = original_settings.redis_url
-        provider_api_key = original_settings.provider_api_key
-        provider_base_url = original_settings.provider_base_url
-        log_level = original_settings.log_level
-        celery_max_retries = original_settings.celery_max_retries
-        celery_backoff_base_seconds = original_settings.celery_backoff_base_seconds
-        rate_limit_requests_per_minute = 3
-        outbox_poll_interval_ms = original_settings.outbox_poll_interval_ms
-
     import app.api.dependencies as deps_mod
-    monkeypatch.setattr(config_module, "get_settings", lambda: _LowLimitSettings())
-    monkeypatch.setattr(deps_mod, "get_settings", lambda: _LowLimitSettings())
+
+    mock_settings = config_module.get_settings().model_copy(
+        update={"rate_limit_requests_per_minute": 3}
+    )
+    monkeypatch.setattr(config_module, "get_settings", lambda: mock_settings)
+    monkeypatch.setattr(deps_mod, "get_settings", lambda: mock_settings)
 
     _, raw_key = api_key
     headers = {"X-API-Key": raw_key}
@@ -58,23 +48,13 @@ async def test_rate_limit_resets_in_new_window(
     minute window and the requests are allowed again.
     """
     from app.core import config as config_module
-
-    original_settings = config_module.get_settings()
-
-    class _LowLimitSettings:
-        database_url = original_settings.database_url
-        redis_url = original_settings.redis_url
-        provider_api_key = original_settings.provider_api_key
-        provider_base_url = original_settings.provider_base_url
-        log_level = original_settings.log_level
-        celery_max_retries = original_settings.celery_max_retries
-        celery_backoff_base_seconds = original_settings.celery_backoff_base_seconds
-        rate_limit_requests_per_minute = 2
-        outbox_poll_interval_ms = original_settings.outbox_poll_interval_ms
-
     import app.api.dependencies as deps_mod
-    monkeypatch.setattr(config_module, "get_settings", lambda: _LowLimitSettings())
-    monkeypatch.setattr(deps_mod, "get_settings", lambda: _LowLimitSettings())
+
+    mock_settings = config_module.get_settings().model_copy(
+        update={"rate_limit_requests_per_minute": 2}
+    )
+    monkeypatch.setattr(config_module, "get_settings", lambda: mock_settings)
+    monkeypatch.setattr(deps_mod, "get_settings", lambda: mock_settings)
 
     _, raw_key = api_key
     headers = {"X-API-Key": raw_key}

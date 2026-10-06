@@ -7,6 +7,8 @@ from app.models.job import JobStatus
 
 
 class JobCreateRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     prompt: str = Field(
         ...,
         min_length=1,

@@ -1,6 +1,6 @@
-# app/workers/tasks.py
 import asyncio
 import json
+import os
 import uuid
 
 from celery.signals import worker_process_init, worker_process_shutdown
@@ -16,12 +16,25 @@ from app.models.job import JobStatus
 from app.services.job_service import JobService
 from app.services.exceptions import InvalidTransition, JobNotFound
 from app.providers.hosted_provider import HostedProvider
-from app.providers.base import ProviderError
+from app.providers.imagen_provider import ImagenProvider
+from app.providers.huggingface_provider import HuggingFaceProvider
+from app.providers.base import ImageProvider, ProviderError
 
 logger = get_logger("celery_worker")
 
 _loop: asyncio.AbstractEventLoop | None = None
-_provider: HostedProvider | None = None
+_provider: ImageProvider | None = None
+
+
+def _make_provider() -> ImageProvider:
+    """Select provider based on PROVIDER_TYPE env var (default: huggingface)."""
+    settings = get_settings()
+    provider_type = (os.environ.get("PROVIDER_TYPE") or getattr(settings, "provider_type", "huggingface")).lower()
+    if provider_type == "hosted":
+        return HostedProvider()
+    if provider_type == "imagen":
+        return ImagenProvider()
+    return HuggingFaceProvider()
 
 
 def _get_event_loop() -> asyncio.AbstractEventLoop:
@@ -32,10 +45,10 @@ def _get_event_loop() -> asyncio.AbstractEventLoop:
     return _loop
 
 
-def _get_provider() -> HostedProvider:
+def _get_provider() -> ImageProvider:
     global _provider
     if _provider is None:
-        _provider = HostedProvider()
+        _provider = _make_provider()
     return _provider
 
 
@@ -44,7 +57,7 @@ def init_worker_process(**kwargs):
     global _loop, _provider
     _loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_loop)
-    _provider = HostedProvider()
+    _provider = _make_provider()
     logger.info("worker_process_initialized")
 
 
@@ -52,7 +65,7 @@ def init_worker_process(**kwargs):
 def shutdown_worker_process(**kwargs):
     global _loop, _provider
     logger.info("worker_process_shutting_down")
-    if _provider and _loop and not _loop.is_closed():
+    if _provider and hasattr(_provider, "close") and _loop and not _loop.is_closed():
         _loop.run_until_complete(_provider.close())
         _provider = None
     if _loop and not _loop.is_closed():
@@ -73,13 +86,19 @@ async def _async_generate_image_task(task, job_id: str):
     log = logger.bind(job_id=job_id)
 
     async with AsyncSessionLocal() as session:
-        svc = JobService(JobRepository(session), OutboxRepository(session), settings.celery_max_retries)
+        svc = JobService(
+            JobRepository(session),
+            OutboxRepository(session),
+            settings.celery_max_retries,
+        )
         try:
             job = await svc.start_processing(uuid.UUID(job_id))
             prompt = job.prompt
             await session.commit()
             log.info("job_processing_started", prompt_len=len(prompt))
         except (InvalidTransition, JobNotFound) as e:
+            # Fires only for genuinely unrecoverable duplicates (e.g. job already COMPLETED).
+            # Worker-crash recovery (job stuck in PROCESSING) is handled inside start_processing().
             log.warning("job_start_skipped", reason=str(e))
             return
 
@@ -87,18 +106,24 @@ async def _async_generate_image_task(task, job_id: str):
 
     provider = _get_provider()
     try:
-        # job_id is the stable idempotency key — identical on every Celery redelivery.
+        # job_id is the stable idempotency key, identical on every Celery redelivery.
+        # The provider uses it to detect a duplicate request and return the
+        # previously generated image instead of creating a new one.
         result = await provider.generate(prompt, idempotency_key=job_id)
         log.info("provider_generation_succeeded", image_url=result.image_url)
     except ProviderError as e:
-        log.error("provider_generation_failed", error=str(e), retryable=e.retryable)
         async with AsyncSessionLocal() as session:
-            svc = JobService(JobRepository(session), OutboxRepository(session), settings.celery_max_retries)
+            svc = JobService(
+                JobRepository(session),
+                OutboxRepository(session),
+                settings.celery_max_retries,
+            )
             job = await svc.fail(uuid.UUID(job_id), str(e), retryable=e.retryable)
             await session.commit()
 
         await _publish_status(job_id, job.status.value, error=str(e))
         if job.status == JobStatus.RETRYING:
+            # start_processing() will advance RETRYING to QUEUED to PROCESSING on redelivery.
             retry_index = max(0, job.retry_count - 1)
             backoff = settings.celery_backoff_base_seconds * (2 ** retry_index)
             log.info("scheduling_job_retry", retry_count=job.retry_count, backoff_seconds=backoff)
@@ -106,7 +131,11 @@ async def _async_generate_image_task(task, job_id: str):
         return
 
     async with AsyncSessionLocal() as session:
-        svc = JobService(JobRepository(session), OutboxRepository(session), settings.celery_max_retries)
+        svc = JobService(
+            JobRepository(session),
+            OutboxRepository(session),
+            settings.celery_max_retries,
+        )
         await svc.complete(uuid.UUID(job_id), result.image_url)
         await session.commit()
 

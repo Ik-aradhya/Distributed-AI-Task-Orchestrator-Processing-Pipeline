@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.routes import health, jobs
+from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.redis_client import close_redis
 
@@ -25,6 +26,11 @@ tags_metadata = [
     },
 ]
 
+settings = get_settings()
+docs_url = "/docs" if settings.api_docs_enabled else None
+redoc_url = "/redoc" if settings.api_docs_enabled else None
+openapi_url = "/openapi.json" if settings.api_docs_enabled else None
+
 app = FastAPI(
     title="AI Image Generation Orchestrator API",
     description="""
@@ -43,9 +49,9 @@ All `/jobs` endpoints require an active API key passed via the **`X-API-Key`** h
     version="1.0.0",
     openapi_tags=tags_metadata,
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    docs_url=docs_url,
+    redoc_url=redoc_url,
+    openapi_url=openapi_url,
 )
 
 app.include_router(jobs.router)

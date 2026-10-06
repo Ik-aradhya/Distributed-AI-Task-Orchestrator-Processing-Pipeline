@@ -12,7 +12,12 @@ class JobRepository:
         self.session = session
 
     def create(self, job_id: uuid.UUID, api_key_id: uuid.UUID, prompt: str) -> Job:
-        job = Job(id=job_id, api_key_id=api_key_id, prompt=prompt, status=JobStatus.PENDING)
+        job = Job(
+            id=job_id,
+            api_key_id=api_key_id,
+            prompt=prompt,
+            status=JobStatus.PENDING,
+        )
         self.session.add(job)
         return job
 

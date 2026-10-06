@@ -1,5 +1,5 @@
-# app/api/dependencies.py
 import hashlib
+import hmac
 
 from fastapi import Depends, Header, HTTPException, status
 
@@ -14,17 +14,34 @@ logger = get_logger("api_auth")
 
 
 def hash_api_key(raw_key: str) -> str:
+    settings = get_settings()
+    if settings.api_key_hash_pepper is not None:
+        pepper = settings.api_key_hash_pepper.get_secret_value().encode()
+        return hmac.new(pepper, raw_key.encode(), hashlib.sha256).hexdigest()
+    return hashlib.sha256(raw_key.encode()).hexdigest()
+
+
+def legacy_hash_api_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode()).hexdigest()
 
 
 async def get_current_api_key(
     x_api_key: str = Header(..., alias="X-API-Key"),
 ):
-    key_hash = hash_api_key(x_api_key)
+    key_hashes = [hash_api_key(x_api_key)]
+    legacy_hash = legacy_hash_api_key(x_api_key)
+    if legacy_hash not in key_hashes:
+        key_hashes.append(legacy_hash)
+
     async with AsyncSessionLocal() as session:
-        api_key = await ApiKeyRepository(session).get_by_hash(key_hash)
+        api_key = None
+        for key_hash in key_hashes:
+            api_key = await ApiKeyRepository(session).get_by_hash(key_hash)
+            if api_key is not None:
+                break
+
         if api_key is None:
-            logger.warning("api_key_auth_failed", key_hash_prefix=key_hash[:8])
+            logger.warning("api_key_auth_failed")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid API key",
